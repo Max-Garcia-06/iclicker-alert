@@ -32,7 +32,8 @@ for answering and never clicks or submits anything in iClicker.
   tests/
     fixtures/poll.html, no_poll.html
     test_detect.py        detect.js against fixtures via Playwright
-    test_alerts.py        alert functions with subprocess/HTTP mocked
+    test_alerts.py        alert functions with subprocess mocked
+    test_watcher.py       config, state machine, recorder, loop e2e
   recordings/             gitignored, record-mode output
 ```
 
@@ -43,7 +44,12 @@ ntfy_topic = "iclicker-<32 random hex chars>"
 imessage_to = "+1XXXXXXXXXX"   # phone number or Apple ID email
 interval_s = 2.0
 url = "https://student.iclicker.com/"
+match = "iclicker.com"         # optional: substring of page URL to watch
+channel = ""                   # optional: "chrome" to use installed Chrome if login is blocked
 ```
+
+`ntfy_topic` shorter than 20 chars or containing `REPLACE` → exit with error
+(short topics are guessable).
 
 Missing `config.toml` → exit with message telling user to copy the example.
 Empty `imessage_to` or `ntfy_topic` → that channel is skipped with a log line.
@@ -52,7 +58,8 @@ Empty `imessage_to` or `ntfy_topic` → that channel is skipped with a log line.
 
 `playwright.chromium.launch_persistent_context(user_data_dir="~/.iclicker-alert/profile", headless=False)`.
 Login persists across runs. Opens `url` on start. Watches the most recently
-focused page whose URL contains `iclicker.com`.
+opened page whose URL contains `match`. Zero pages left open → treated as
+browser closed → exit.
 
 ## Detection
 
@@ -74,7 +81,8 @@ Detection and alerts still run in record mode.
 ## Alerts
 
 - **ntfy:** `POST https://ntfy.sh/<topic>`, body `iClicker poll open`,
-  headers `Priority: high`, `Title: iClicker`. Stdlib `urllib`, 5s timeout.
+  headers `Priority: high`, `Title: iClicker`. Sent with `curl -m 5` (uses
+  macOS system certs; avoids SSL cert issues in uv-managed Python).
 - **macOS:** `osascript -e 'display notification "Poll open" with title "iClicker"'`.
 - **iMessage:** `osascript` telling Messages to send `iClicker poll open` to
   `imessage_to` via the iMessage service. Recipient passed as an argv
@@ -105,7 +113,7 @@ uv run watcher.py --test-alert # fire all alerts once and exit
 - `test_detect.py`: load fixtures into headless Chromium, assert detect.js
   returns open for poll.html, closed for no_poll.html (including hidden A–E
   buttons → closed).
-- `test_alerts.py`: mock `subprocess.run` and `urllib.request.urlopen`; assert
+- `test_alerts.py`: mock `subprocess.run`; assert
   argv shape, that recipient is passed as argv not script text, and that one
   channel failing doesn't stop the others.
 - Manual: `--test-alert` confirms all three arrive. First real class run in
