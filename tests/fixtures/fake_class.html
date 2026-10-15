@@ -1,0 +1,20 @@
+<!doctype html>
+<html><body>
+  <h1 id="status">Waiting for poll</h1>
+  <div id="answers"></div>
+  <script>
+    const answers = document.getElementById("answers");
+    const status = document.getElementById("status");
+    function open() {
+      status.textContent = "Poll open";
+      answers.innerHTML = "<button>A</button><button>B</button><button>C</button><button>D</button>";
+    }
+    function close() {
+      status.textContent = "Poll closed";
+      answers.innerHTML = "";
+    }
+    setTimeout(open, 1000);
+    setTimeout(close, 2500);
+    setTimeout(open, 4000);
+  </script>
+</body></html>
