@@ -1,0 +1,13 @@
+[project]
+name = "iclicker-alert"
+version = "0.1.0"
+description = "Alert when an iClicker poll opens"
+requires-python = ">=3.12"
+dependencies = ["playwright>=1.48"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

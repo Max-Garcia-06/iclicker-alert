@@ -1,0 +1,14 @@
+# Copy to config.toml and fill in.
+# Generate a topic:  python3 -c "import secrets; print('iclicker-' + secrets.token_hex(16))"
+# Then subscribe to that topic in the ntfy phone app (ntfy.sh server).
+ntfy_topic = "iclicker-REPLACE_ME"
+
+# Your phone number (+1XXXXXXXXXX) or Apple ID email. Empty string = skip iMessage.
+imessage_to = ""
+
+interval_s = 2.0
+url = "https://student.iclicker.com/"
+match = "iclicker.com"
+
+# Set to "chrome" to use your installed Google Chrome if login is blocked in Chromium.
+channel = ""
