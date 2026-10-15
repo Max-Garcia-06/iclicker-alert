@@ -146,7 +146,15 @@ def run_loop(ctx, cfg: dict, alert=fire_all, recorder: "Recorder | None" = None,
                         recorder.maybe_save(page, result)
                     except Exception as e:
                         log.warning("record failed: %s", e)
-        time.sleep(cfg["interval_s"])
+        _wait(ctx, cfg["interval_s"])
+
+
+def _wait(ctx, seconds: float) -> None:
+    """Sleep through Playwright so its events (navigations, page.url updates, close) keep flowing."""
+    try:
+        ctx.pages[0].wait_for_timeout(seconds * 1000)
+    except (PlaywrightError, IndexError):
+        time.sleep(seconds)
 
 
 def watch(cfg: dict, record: bool = False) -> None:

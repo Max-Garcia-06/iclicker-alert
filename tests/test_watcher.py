@@ -188,3 +188,15 @@ def test_recorder_rate_limits_ticking_text(ctx, tmp_path):
     assert rec.maybe_save(page, {"open": True, "reason": "x"}) is False  # countdown tick, same state
     page.set_content("<p>closed</p>")
     assert rec.maybe_save(page, {"open": False, "reason": "x"}) is True  # state change always saves
+
+
+def test_run_loop_finds_page_after_navigating_away_and_back(ctx):
+    # SSO flow: iClicker -> university login -> back to iClicker. page.url must refresh
+    # even on ticks where no page matches.
+    page = ctx.pages[0] if ctx.pages else ctx.new_page()
+    page.goto((FIXTURES / "no_poll.html").as_uri())
+    page.evaluate("() => setTimeout(() => { location.href = 'poll.html'; }, 600)")
+    calls = []
+    run_loop(ctx, {**loop_cfg(), "match": "/poll.html"}, alert=calls.append, max_ticks=8)
+    time.sleep(0.2)
+    assert len(calls) == 1
