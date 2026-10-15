@@ -9,6 +9,7 @@ import time
 import tomllib
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
@@ -69,37 +70,51 @@ class PollState:
 
 
 class Recorder:
-    """Saves page HTML + screenshot whenever the visible text changes."""
+    """Saves page HTML + screenshot when visible text changes (rate-limited unless poll state flips)."""
+
+    MIN_GAP_S = 10
 
     def __init__(self, out_dir: Path):
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
-        self.last_hash = None
+        self.last = {}  # page id -> (text hash, open, save time)
 
     def maybe_save(self, page, result: dict) -> bool:
         text = page.evaluate("() => document.body ? document.body.innerText : ''")
         digest = hashlib.sha256(text.encode()).hexdigest()
-        if digest == self.last_hash:
-            return False
-        self.last_hash = digest
+        now = time.monotonic()
+        prev = self.last.get(id(page))
+        if prev:
+            prev_digest, prev_open, prev_time = prev
+            if digest == prev_digest:
+                return False
+            # Countdown timers change text every tick; only save those every MIN_GAP_S.
+            if result["open"] == prev_open and now - prev_time < self.MIN_GAP_S:
+                return False
+        self.last[id(page)] = (digest, result["open"], now)
         ts = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         (self.out_dir / f"{ts}.html").write_text(page.content())
-        page.screenshot(path=str(self.out_dir / f"{ts}.png"), full_page=True)
+        page.screenshot(path=str(self.out_dir / f"{ts}.png"), full_page=True, timeout=5000)
         with (self.out_dir / "log.jsonl").open("a") as f:
             f.write(json.dumps({"ts": ts, "url": page.url, "detect": result}) + "\n")
         log.info("recorded %s (%s)", ts, result["reason"])
         return True
 
 
-def find_page(ctx, match: str):
-    pages = [p for p in ctx.pages if match in p.url]
-    return pages[-1] if pages else None
+def find_pages(ctx, match: str) -> list:
+    """Pages whose host+path contains match (query string ignored, e.g. SSO redirect=...)."""
+    def key(url):
+        parts = urlsplit(url)
+        return parts.netloc + parts.path
+    return [p for p in ctx.pages if match in key(p.url)]
 
 
 def run_loop(ctx, cfg: dict, alert=fire_all, recorder: "Recorder | None" = None,
              max_ticks: int | None = None) -> None:
     closed = threading.Event()
     ctx.on("close", lambda _: closed.set())
+    # Any listener stops Playwright from auto-dismissing alert/confirm; leave them for the user.
+    ctx.on("dialog", lambda d: log.info("page dialog waiting for you: %s", d.message))
     state = PollState()
     warned_missing = False
     ticks = 0
@@ -108,23 +123,29 @@ def run_loop(ctx, cfg: dict, alert=fire_all, recorder: "Recorder | None" = None,
         if not ctx.pages:
             log.info("browser window closed, exiting")
             return
-        page = find_page(ctx, cfg["match"])
-        if page is None:
+        pages = find_pages(ctx, cfg["match"])
+        if not pages:
             if not warned_missing:
                 log.info("no page matching %r open; join class in the browser window", cfg["match"])
                 warned_missing = True
         else:
             warned_missing = False
-            try:
-                result = page.evaluate(DETECT_JS)
-                if recorder:
-                    recorder.maybe_save(page, result)
-            except PlaywrightError as e:
-                log.debug("detect failed (page navigating?): %s", e)
-                result = None
-            if result is not None and state.update(result["open"]):
-                log.info("POLL OPEN (%s)", result["reason"])
+            results = []
+            for page in pages:
+                try:
+                    results.append((page, page.evaluate(DETECT_JS)))
+                except PlaywrightError as e:
+                    log.debug("detect failed (page navigating?): %s", e)
+            open_reasons = [r["reason"] for _, r in results if r["open"]]
+            if results and state.update(bool(open_reasons)):
+                log.info("POLL OPEN (%s)", open_reasons[0])
                 threading.Thread(target=alert, args=(cfg,), daemon=True).start()
+            if recorder:
+                for page, result in results:
+                    try:
+                        recorder.maybe_save(page, result)
+                    except Exception as e:
+                        log.warning("record failed: %s", e)
         time.sleep(cfg["interval_s"])
 
 

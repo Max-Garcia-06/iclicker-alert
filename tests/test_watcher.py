@@ -71,7 +71,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-from watcher import Recorder, find_page, run_loop
+from watcher import Recorder, find_pages, run_loop
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -100,13 +100,19 @@ def test_run_loop_alerts_once_per_poll_and_rearms(ctx):
     assert len(calls) == 2
 
 
-def test_find_page_ignores_other_pages(ctx):
+def test_find_pages_ignores_other_pages(ctx):
     other = ctx.pages[0] if ctx.pages else ctx.new_page()
     other.goto((FIXTURES / "no_poll.html").as_uri())
-    assert find_page(ctx, "fake_class.html") is None
+    assert find_pages(ctx, "fake_class.html") == []
     target = ctx.new_page()
     target.goto((FIXTURES / "fake_class.html").as_uri())
-    assert find_page(ctx, "fake_class.html") is target
+    assert find_pages(ctx, "fake_class.html") == [target]
+
+
+def test_find_pages_ignores_match_in_query_string(ctx):
+    page = ctx.pages[0] if ctx.pages else ctx.new_page()
+    page.goto((FIXTURES / "no_poll.html").as_uri() + "?redirect=fake_class.html")
+    assert find_pages(ctx, "fake_class.html") == []
 
 
 def test_run_loop_exits_when_all_pages_closed(ctx):
@@ -129,3 +135,56 @@ def test_recorder_saves_only_on_text_change(ctx, tmp_path):
     assert files == [".html", ".html", ".png", ".png"]
     lines = (tmp_path / "rec" / "log.jsonl").read_text().splitlines()
     assert [json.loads(l)["detect"]["open"] for l in lines] == [False, True]
+
+
+class FakeCtx:
+    def __init__(self):
+        self.pages = []
+        self.events = []
+
+    def on(self, event, handler):
+        self.events.append(event)
+
+
+def test_run_loop_leaves_page_dialogs_for_user():
+    # With no "dialog" listener, Playwright auto-dismisses alert/confirm, acting on iClicker.
+    ctx = FakeCtx()
+    run_loop(ctx, loop_cfg(), alert=lambda cfg: None, max_ticks=1)
+    assert "dialog" in ctx.events
+
+
+def test_run_loop_watches_every_matching_tab(ctx):
+    first = ctx.pages[0] if ctx.pages else ctx.new_page()
+    first.goto((FIXTURES / "poll.html").as_uri())
+    second = ctx.new_page()
+    second.goto((FIXTURES / "no_poll.html").as_uri())
+    calls = []
+    run_loop(ctx, {**loop_cfg(), "match": "fixtures/"}, alert=calls.append, max_ticks=2)
+    time.sleep(0.2)
+    assert len(calls) == 1
+
+
+class BrokenRecorder:
+    def maybe_save(self, page, result):
+        raise OSError(28, "No space left on device")
+
+
+def test_run_loop_alerts_even_when_recorder_fails(ctx):
+    page = ctx.pages[0] if ctx.pages else ctx.new_page()
+    page.goto((FIXTURES / "poll.html").as_uri())
+    calls = []
+    run_loop(ctx, {**loop_cfg(), "match": "poll.html"}, alert=calls.append,
+             recorder=BrokenRecorder(), max_ticks=2)
+    time.sleep(0.2)
+    assert len(calls) == 1
+
+
+def test_recorder_rate_limits_ticking_text(ctx, tmp_path):
+    page = ctx.pages[0] if ctx.pages else ctx.new_page()
+    rec = Recorder(tmp_path / "rec")
+    page.set_content("<p>0:30</p>")
+    assert rec.maybe_save(page, {"open": True, "reason": "x"}) is True
+    page.set_content("<p>0:28</p>")
+    assert rec.maybe_save(page, {"open": True, "reason": "x"}) is False  # countdown tick, same state
+    page.set_content("<p>closed</p>")
+    assert rec.maybe_save(page, {"open": False, "reason": "x"}) is True  # state change always saves
